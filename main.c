@@ -6,6 +6,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/param.h>
+#include <getopt.h>
 
 #define DISPLAY_HEIGHT 32
 #define DISPLAY_WIDTH 64
@@ -162,6 +163,12 @@ static bool pause = false;
 static uint8_t *keyPressReg;
 static bool keys[16];
 
+// Thanks to mir3z/chip8-emu
+struct {
+    bool shift;
+    bool loadStore;
+} quirks;
+
 static bool executeInstruction() {
     bool retVal = true;
     uint16_t op = readBytes(registers.pc);
@@ -242,11 +249,14 @@ static bool executeInstruction() {
         registers.vf = (uint8_t) (vx > vy);
         *reg = vx - vy;
     } else if ((op & 0xF00F) == 0x8006) {
-        // 8xy6: SHR Vx {, Vy}
-        uint8_t *reg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
-        uint8_t vx = *reg;
-        registers.vf = (uint8_t) (vx & 0x1);
-        *reg = (uint8_t) (vx / 2);
+        // 8xy6: SHR Vx, Vy
+        uint8_t *regVx = registerVx((uint8_t) ((op & 0x0F00) >> 8));
+        uint8_t *regVy = registerVx((uint8_t) ((op & 0x00F0) >> 4));
+        if (quirks.shift) {
+            regVy = regVx;
+        }
+        registers.vf = (uint8_t) (*regVy & 0x1);
+        *regVx = *regVy >> 1;
     } else if ((op & 0xF00F) == 0x8007) {
         // 8xy7: SUBN Vx, Vy
         uint8_t *reg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -256,10 +266,13 @@ static bool executeInstruction() {
         *reg = vy - vx;
     } else if ((op & 0xF00F) == 0x800E) {
         // 8xyE: SHL Vx {, Vy}
-        uint8_t *reg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
-        uint8_t vx = *reg;
-        registers.vf = (uint8_t) (vx & 0x100) >> 8;
-        *reg = (uint8_t) (vx * 2);
+        uint8_t *regVx = registerVx((uint8_t) ((op & 0x0F00) >> 8));
+        uint8_t *regVy = registerVx((uint8_t) ((op & 0x00F0) >> 4));
+        if (quirks.shift) {
+            regVy = regVx;
+        }
+        registers.vf = (uint8_t) ((*regVy >> 7) & 0x1);
+        *regVx = *regVy << 1;
     } else if ((op & 0xF00F) == 0x9000) {
         // 9xy0: SNE Vx, Vy
         uint8_t vx = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -335,11 +348,17 @@ static bool executeInstruction() {
         for (uint8_t i = 0; i <= end; ++i) {
             writeByte(registers.i + i, *registerVx(i));
         }
+        if (!quirks.loadStore) {
+            registers.i += end + 1;
+        }
     } else if ((op & 0xF0FF) == 0xF065) {
         // Fx65: LD Vx, [I]
         uint8_t end = (uint8_t) ((op & 0x0F00) >> 8);
         for (uint8_t i = 0; i <= end; ++i) {
             *registerVx(i) = readByte(registers.i + i);
+        }
+        if (!quirks.loadStore) {
+            registers.i += end + 1;
         }
     } else {
         fprintf(stderr, "Unknown instruction 0x%04x at 0x%04x\n", op, registers.pc);
@@ -360,16 +379,34 @@ static void reset() {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: chipemu [rom]\n");
+    char *filename = NULL;
+    struct option long_opts[] = {
+            {"quirk-shift", no_argument, (int *) &quirks.shift, true},
+            {"quirk-loadstore", no_argument, (int *) &quirks.loadStore, true}
+    };
+    int optIndex;
+    while ((getopt_long(argc, argv, "", long_opts, &optIndex)) != -1) {
+    }
+    // TODO improve parsing
+    for (int i = 1; i < argc; ++i) {
+        char *arg = argv[i];
+        if (!strcmp(arg, "--")) {
+            break;
+        } else if (arg[0] != '-') {
+            filename = arg;
+            break;
+        }
+    }
+    if (filename == NULL) {
+        fprintf(stderr, "Usage: chipemu [rom] [--quirk-shift] [--quirk-loadstore]\n");
         return 1;
     }
+
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
         return 1;
     }
 
-    char *filename = argv[1];
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
         fprintf(stderr, "Failed open ROM %s\n", filename);
