@@ -344,13 +344,14 @@ static bool executeInstruction() {
         // Dxyn: DRW Vx, Vy, nibble
         uint8_t x = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
         uint8_t y = *registerVx((uint8_t) ((op & 0x00F0) >> 4));
+        registers.vf = 0;
         for (int i = 0; i < (op & 0x000F); ++i) {
             uint16_t val = readByte((uint16_t) (registers.i + i)) << (8 - (x % 8));
             uint16_t loc = (uint16_t) (VIDEO_LOC + ((x % DISPLAY_WIDTH) / 8)
                                        + (((y + i) % DISPLAY_HEIGHT) * (DISPLAY_WIDTH / 8)));
             uint16_t bytes = readBytes(loc);
             writeBytes(loc, bytes ^ val);
-            registers.vf = (uint8_t) ((bytes & val) ? 1 : 0);
+            registers.vf = (uint8_t) (registers.vf || ((bytes & val) ? 1 : 0));
         }
         drawFramebuffer(window);
     } else if ((op & 0xF0FF) == 0xE09E) {
@@ -428,7 +429,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *filename = "games/MAZE";
+    char *filename = "games/TETRIS";
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
         fprintf(stderr, "Failed open ROM %s\n", filename);
@@ -476,7 +477,8 @@ int main(int argc, char *argv[]) {
             handleEvent(event);
         }
         if (pause) {
-            SDL_WaitEvent(NULL);
+            if (!quit)
+                SDL_WaitEvent(NULL);
             continue;
         }
         if (!executeInstruction()) {
@@ -512,6 +514,7 @@ void handleEvent(SDL_Event event) {
                     keys[k] = true;
                     if (pause && keyPressReg) {
                         *keyPressReg = k;
+                        keyPressReg = NULL;
                         pause = false;
                     }
                     break;
