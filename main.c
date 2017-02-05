@@ -141,12 +141,7 @@ static bool stackPush(uint16_t val) {
         fprintf(stderr, "Stack overflow!");
         return false;
     }
-    printf("stack push 0x%04x\n", val);
     return writeBytes(registers.sp, val);
-}
-
-static uint16_t stackPeek() {
-    return readBytes(registers.sp);
 }
 
 static uint16_t stackPop() {
@@ -155,7 +150,6 @@ static uint16_t stackPop() {
         return (uint16_t) -1;
     }
     uint16_t val = readBytes(registers.sp);
-    printf("stack pop 0x%04x\n", val);
     registers.sp -= STACK_ELEM_SIZE;
     return val;
 }
@@ -205,7 +199,6 @@ static bool keys[16];
 static bool executeInstruction() {
     bool retVal = true;
     uint16_t op = readBytes(registers.pc);
-    printf("-- 0x%04x: exec 0x%04x\n", registers.pc, op);
     registers.pc += sizeof(registers.pc);
 
     if (op == 0x00E0) {
@@ -214,10 +207,8 @@ static bool executeInstruction() {
         drawFramebuffer(window);
     } else if (op == 0x00EE) {
         // 00EE: RET
-        uint16_t val = stackPop();
-        registers.pc = val;
-        printf("jmp to 0x%04x\n", registers.pc);
-        retVal = val != 1;
+        registers.pc = stackPop();
+        retVal = registers.pc != 1;
     } else if ((op & 0xF000) == 0x0000) {
         // 0xxx: NOP
     } else if ((op & 0xF000) == 0x1000) {
@@ -228,28 +219,18 @@ static bool executeInstruction() {
             pause = true;
         }
         registers.pc = addr;
-        printf("jmp to 0x%04x\n", registers.pc);
     } else if ((op & 0xF000) == 0x2000) {
         // 2xxx: CALL xxx
         retVal = stackPush(registers.pc);
         registers.pc = (uint16_t) (op & 0x0FFF);
-        printf("jmp to 0x%04x\n", registers.pc);
     } else if ((op & 0xF000) == 0x3000) {
         // 3xyy: SE Vx, yy
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        uint8_t val = *registerVx(reg);
-        printf("checking reg v%02x, val 0x%02x == 0x%02x\n", reg, val, op & 0x00FF);
-        if (val == (op & 0x00FF)) {
-            printf("skipping next instruction\n");
+        if (*registerVx((uint8_t) ((op & 0x0F00) >> 8)) == (op & 0x00FF)) {
             registers.pc += sizeof(registers.pc);
         }
     } else if ((op & 0xF000) == 0x4000) {
         // 4xyy: SNE Vx, yy
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        uint8_t val = *registerVx(reg);
-        printf("checking reg v%02x, val 0x%02x != 0x%02x\n", reg, val, op & 0x00FF);
-        if (val != (op & 0x00FF)) {
-            printf("skipping next instruction\n");
+        if (*registerVx((uint8_t) ((op & 0x0F00) >> 8)) != (op & 0x00FF)) {
             registers.pc += sizeof(registers.pc);
         }
     } else if ((op & 0xF00F) == 0x5000) {
@@ -261,21 +242,16 @@ static bool executeInstruction() {
         }
     } else if ((op & 0xF000) == 0x6000) {
         // 6xyy: LD Vx, yy
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        printf("setting reg v%02x = 0x%04x\n", reg, op & 0x00FF);
-        *registerVx(reg) = (uint8_t) (op & 0x00FF);
+        *registerVx((uint8_t) ((op & 0x0F00) >> 8)) = (uint8_t) (op & 0x00FF);
     } else if ((op & 0xF000) == 0x7000) {
         // 7xyy: ADD Vx, yy
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        printf("adding reg v%02x += 0x%04x\n", reg, op & 0x00FF);
-        *registerVx(reg) += (uint8_t) (op & 0x00FF);
-        printf("reg v%02x = 0x%04x\n", reg, *registerVx(reg));
+        *registerVx((uint8_t) ((op & 0x0F00) >> 8)) += (uint8_t) (op & 0x00FF);
     } else if ((op & 0xF00F) == 0x8000) {
         // 8xy0: LD Vx, Vy
         *registerVx((uint8_t) ((op & 0x0F00) >> 8)) =
                 *registerVx((uint8_t) ((op & 0x00F0) >> 4));
     } else if ((op & 0xF00F) == 0x8001) {
-        // 8xy2: OR Vx, Vy
+        // 8xy1: OR Vx, Vy
         uint8_t *vx = registerVx((uint8_t) ((op & 0x0F00) >> 8));
         *vx = *vx | *registerVx((uint8_t) ((op & 0x00F0) >> 4));
     } else if ((op & 0xF00F) == 0x8002) {
@@ -305,7 +281,6 @@ static bool executeInstruction() {
         uint8_t vx = *reg;
         registers.vf = (uint8_t) (vx & 0x1);
         *reg = (uint8_t) (vx / 2);
-        // TODO figure out if this is right.......
     } else if ((op & 0xF00F) == 0x8007) {
         // 8xy7: SUBN Vx, Vy
         uint8_t *reg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -319,7 +294,6 @@ static bool executeInstruction() {
         uint8_t vx = *reg;
         registers.vf = (uint8_t) (vx & 0x100) >> 8;
         *reg = (uint8_t) (vx * 2);
-        // TODO figure out if this is right.......
     } else if ((op & 0xF00F) == 0x9000) {
         // 9xy0: SNE Vx, Vy
         uint8_t vx = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -333,13 +307,10 @@ static bool executeInstruction() {
     } else if ((op & 0xF000) == 0xB000) {
         // Bxxx: JP V0, xxx
         registers.pc = (uint16_t) (registers.v0 + (op & 0x0FFF));
-        printf("jmp to 0x%04x (v0 0x%04x + 0x%04x)\n", registers.pc, registers.v0, (op & 0x0FFF));
     } else if ((op & 0xF000) == 0xC000) {
         // Cxyy: RND Vx, yy
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
         uint8_t val = (uint8_t) ((rand() % 0xFF) & (op & 0x00FF));
-        printf("random reg v%02x = 0x%02x\n", reg, val);
-        *registerVx(reg) = val;
+        *registerVx((uint8_t) ((op & 0x0F00) >> 8)) = val;
     } else if ((op & 0xF000) == 0xD000) {
         // Dxyn: DRW Vx, Vy, nibble
         uint8_t x = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -364,35 +335,27 @@ static bool executeInstruction() {
             registers.pc += sizeof(registers.pc);
     } else if ((op & 0xF0FF) == 0xF007) {
         // Fx07: LD Vx, DT
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        *registerVx(reg) = registers.dt;
-        printf("loading dt %02x into reg v%02x\n", registers.dt, reg);
+        *registerVx((uint8_t) ((op & 0x0F00) >> 8)) = registers.dt;
     } else if ((op & 0xF0FF) == 0xF00A) {
         // Fx0A: LD Vx, K
         keyPressReg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
         pause = true;
     } else if ((op & 0xF0FF) == 0xF015) {
         // Fx15: LD DT, Vx
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        registers.dt = *registerVx(reg);
-        printf("loading reg v%02x into dt %02x\n", reg, registers.dt);
+        registers.dt = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
     } else if ((op & 0xF0FF) == 0xF018) {
         // Fx18: LD ST, Vx
         // TODO implement sound timer
     } else if ((op & 0xF0FF) == 0xF01E) {
         // Fx1E: ADD I, Vx
-        uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
-        uint8_t regVal = *registerVx(reg);
-        printf("adding I 0x%04x += reg v%02x 0x%02x\n", registers.i, reg, regVal);
-        registers.i += regVal;
-        printf("reg I = 0x%04x\n", registers.i);
+        registers.i += *registerVx((uint8_t) ((op & 0x0F00) >> 8));
     } else if ((op & 0xF0FF) == 0xF029) {
         // Fx29: LD I, sprite for Vx
         uint8_t num = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
         registers.i = (uint16_t) (SPRITE_LOC + (num * 5));
-        printf("read sprite location for %01x into I 0x%04x\n", num, registers.i);
     } else if ((op & 0xF0FF) == 0xF033) {
         // Fx33: LD B, Vx
+        // TODO optimize?
         uint8_t num = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
         uint8_t hundreds = (uint8_t) (num / 100);
         writeByte(registers.i, hundreds);
@@ -404,16 +367,13 @@ static bool executeInstruction() {
         // Fx55: LD [I], Vx
         uint8_t end = (uint8_t) ((op & 0x0F00) >> 8);
         for (uint8_t i = 0; i <= end; ++i) {
-            uint8_t val = *registerVx(i);
-            printf("storing reg v%02x 0x%02x at 0x%04x\n", i, val, registers.i + i);
-            writeByte(registers.i + i, val);
+            writeByte(registers.i + i, *registerVx(i));
         }
     } else if ((op & 0xF0FF) == 0xF065) {
+        // Fx65: LD Vx, [I]
         uint8_t end = (uint8_t) ((op & 0x0F00) >> 8);
         for (uint8_t i = 0; i <= end; ++i) {
-            uint8_t val = readByte(registers.i + i);
-            printf("loading 0x%02x at 0x%04x into reg v%02x\n", val, registers.i + i, i);
-            *registerVx(i) = val;
+            *registerVx(i) = readByte(registers.i + i);
         }
     } else {
         fprintf(stderr, "Unknown instruction 0x%04x at 0x%04x\n", op, registers.pc);
