@@ -198,7 +198,7 @@ static void drawFramebuffer(SDL_Window *window) {
 }
 
 static bool quit = false;
-static bool pauseForKey = false;
+static bool pause = false;
 static uint8_t *keyPressReg;
 static bool keys[16];
 
@@ -222,7 +222,12 @@ static bool executeInstruction() {
         // 0xxx: NOP
     } else if ((op & 0xF000) == 0x1000) {
         // 1xxx: JP xxx
-        registers.pc = (uint16_t) (op & 0x0FFF);
+        uint16_t addr = (uint16_t) (op & 0x0FFF);
+        if (registers.pc - sizeof(registers.pc) == addr) {
+            // Detect infinite loop and pause execution
+            pause = true;
+        }
+        registers.pc = addr;
         printf("jmp to 0x%04x\n", registers.pc);
     } else if ((op & 0xF000) == 0x2000) {
         // 2xxx: CALL xxx
@@ -364,7 +369,7 @@ static bool executeInstruction() {
     } else if ((op & 0xF0FF) == 0xF00A) {
         // Fx0A: LD Vx, K
         keyPressReg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
-        pauseForKey = true;
+        pause = true;
     } else if ((op & 0xF0FF) == 0xF015) {
         // Fx15: LD DT, Vx
         uint8_t reg = (uint8_t) ((op & 0x0F00) >> 8);
@@ -423,7 +428,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *filename = "games/KALEID";
+    char *filename = "games/MAZE";
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
         fprintf(stderr, "Failed open ROM %s\n", filename);
@@ -470,7 +475,7 @@ int main(int argc, char *argv[]) {
         while (SDL_PollEvent(&event)) {
             handleEvent(event);
         }
-        if (pauseForKey) {
+        if (pause) {
             SDL_WaitEvent(NULL);
             continue;
         }
@@ -505,9 +510,9 @@ void handleEvent(SDL_Event event) {
             for (uint8_t k = 0; k < sizeof(mappings); ++k) {
                 if (event.key.keysym.sym == mappings[k]) {
                     keys[k] = true;
-                    if (pauseForKey) {
+                    if (pause && keyPressReg) {
                         *keyPressReg = k;
-                        pauseForKey = false;
+                        pause = false;
                     }
                     break;
                 }
