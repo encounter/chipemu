@@ -211,6 +211,7 @@ static bool executeInstruction() {
     if (op == 0x00E0) {
         // 00E0: CLS
         memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
+        drawFramebuffer(window);
     } else if (op == 0x00EE) {
         // 00EE: RET
         uint16_t val = stackPop();
@@ -346,6 +347,7 @@ static bool executeInstruction() {
             writeBytes(loc, bytes ^ val);
             registers.vf = (uint8_t) ((bytes & val) ? 1 : 0);
         }
+        drawFramebuffer(window);
     } else if ((op & 0xF0FF) == 0xE09E) {
         // Ex9E: SKP Vx
         if (keys[*registerVx((uint8_t) ((op & 0x0F00) >> 8))])
@@ -421,7 +423,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *filename = "games/HIDDEN";
+    char *filename = "games/KALEID";
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
         fprintf(stderr, "Failed open ROM %s\n", filename);
@@ -483,7 +485,6 @@ int main(int argc, char *argv[]) {
             registers.st = (uint8_t) MAX(registers.st - (ms / interval), 0);
             gettimeofday(&t1, NULL);
         }
-        drawFramebuffer(window);
     }
 
     SDL_DestroyWindow(window);
@@ -492,10 +493,10 @@ int main(int argc, char *argv[]) {
 }
 
 static uint32_t mappings[16] = {
-        SDLK_1, SDLK_2, SDLK_3, SDLK_4,
-        SDLK_q, SDLK_w, SDLK_e, SDLK_r,
-        SDLK_a, SDLK_s, SDLK_d, SDLK_f,
-        SDLK_z, SDLK_x, SDLK_c, SDLK_v
+        SDLK_x, SDLK_1, SDLK_2, SDLK_3,
+        SDLK_q, SDLK_w, SDLK_e, SDLK_a,
+        SDLK_s, SDLK_d, SDLK_z, SDLK_c,
+        SDLK_4, SDLK_r, SDLK_f, SDLK_v
 };
 
 void handleEvent(SDL_Event event) {
