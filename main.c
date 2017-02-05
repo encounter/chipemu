@@ -360,12 +360,16 @@ static void reset() {
 }
 
 int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: chipemu [rom]\n");
+        return 1;
+    }
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
         return 1;
     }
 
-    char *filename = "games/TETRIS";
+    char *filename = argv[1];
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
         fprintf(stderr, "Failed open ROM %s\n", filename);
