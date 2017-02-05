@@ -46,7 +46,6 @@ static uint16_t readBytes(uint16_t loc) {
 
 static bool writeByte(uint16_t loc, uint8_t val) {
     if ((loc < ENTRY_POINT || loc > MEM_SIZE - 1)
-        && !(loc >= SPRITE_LOC && loc <= SPRITE_LOC + SPRITE_SIZE)
         && !(loc >= STACK_LOC && loc <= STACK_LOC + STACK_SIZE)
         && !(loc >= VIDEO_LOC && loc <= VIDEO_LOC + VIDEO_SIZE)) {
         fprintf(stderr, "Failed to write 0x%02x to location 0x%03x\n", val, loc);
@@ -58,7 +57,6 @@ static bool writeByte(uint16_t loc, uint8_t val) {
 
 static bool writeBytes(uint16_t loc, uint16_t val) {
     if ((loc < ENTRY_POINT || loc > MEM_SIZE - 1)
-        && !(loc >= SPRITE_LOC && loc <= SPRITE_LOC + SPRITE_SIZE - 1)
         && !(loc >= STACK_LOC && loc <= STACK_LOC + STACK_SIZE - 1)
         && !(loc >= VIDEO_LOC && loc <= VIDEO_LOC + VIDEO_SIZE - 1)) {
         fprintf(stderr, "Failed to write 0x%04x to location 0x%03x\n", val, loc);
@@ -68,7 +66,7 @@ static bool writeBytes(uint16_t loc, uint16_t val) {
     return true;
 }
 
-struct registers {
+struct {
     uint8_t v0;
     uint8_t v1;
     uint8_t v2;
@@ -96,43 +94,11 @@ struct registers {
 void handleEvent(SDL_Event event);
 
 static uint8_t *registerVx(uint8_t num) {
-    switch (num) {
-        case 0x0:
-            return &registers.v0;
-        case 0x1:
-            return &registers.v1;
-        case 0x2:
-            return &registers.v2;
-        case 0x3:
-            return &registers.v3;
-        case 0x4:
-            return &registers.v4;
-        case 0x5:
-            return &registers.v5;
-        case 0x6:
-            return &registers.v6;
-        case 0x7:
-            return &registers.v7;
-        case 0x8:
-            return &registers.v8;
-        case 0x9:
-            return &registers.v9;
-        case 0xA:
-            return &registers.va;
-        case 0xB:
-            return &registers.vb;
-        case 0xC:
-            return &registers.vc;
-        case 0xD:
-            return &registers.vd;
-        case 0xE:
-            return &registers.ve;
-        case 0xF:
-            return &registers.vf;
-        default:
-            fprintf(stderr, "Unknown register 0x%02x\n", num);
-            return NULL;
+    if (num > 0xF) {
+        fprintf(stderr, "Unknown register 0x%02x\n", num);
+        return NULL;
     }
+    return &registers.v0 + num;
 }
 
 static bool stackPush(uint16_t val) {
@@ -383,6 +349,16 @@ static bool executeInstruction() {
     return retVal;
 }
 
+static void reset() {
+    memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
+    memcpy((void *) &mem[SPRITE_LOC], sprites, sizeof(sprites));
+    drawFramebuffer(window);
+    srand((uint16_t) time(NULL));
+
+    registers.sp = STACK_LOC;
+    registers.pc = ENTRY_POINT;
+}
+
 int main(int argc, char *argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
@@ -409,27 +385,19 @@ int main(int argc, char *argv[]) {
     }
     fclose(fh);
 
-    /*SDL_Window **/window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                                              DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
-                                              SDL_WINDOW_SHOWN);
+    window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                              DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
+                              SDL_WINDOW_SHOWN);
     if (window == NULL) {
         fprintf(stderr, "Failed to initialize window. Error: %s\n", SDL_GetError());
         return 1;
     }
 
-    memcpy((void *) &mem[SPRITE_LOC], sprites, sizeof(sprites));
-    drawFramebuffer(window);
-
-    //setbuf(stdout, NULL);
-    //setbuf(stderr, NULL);
-    srand((uint16_t) time(NULL));
+    reset();
 
     double ms, interval = 1000.0 / 60;
     struct timeval t1, t2;
     gettimeofday(&t1, NULL);
-
-    registers.sp = STACK_LOC;
-    registers.pc = ENTRY_POINT;
 
     SDL_Event event;
     while (!quit) {
@@ -469,6 +437,10 @@ static uint32_t mappings[16] = {
 void handleEvent(SDL_Event event) {
     switch (event.type) {
         case SDL_KEYDOWN:
+            if (event.key.keysym.sym == SDLK_ESCAPE) {
+                reset();
+                break;
+            }
             for (uint8_t k = 0; k < sizeof(mappings); ++k) {
                 if (event.key.keysym.sym == mappings[k]) {
                     keys[k] = true;
