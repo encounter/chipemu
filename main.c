@@ -1,7 +1,14 @@
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <SDL/SDL.h>
+#else
+#include <SDL2/SDL.h>
+#endif
 #include <netinet/in.h>
 #include <time.h>
 #include <sys/time.h>
@@ -104,7 +111,7 @@ static uint8_t *registerVx(uint8_t num) {
 
 static bool stackPush(uint16_t val) {
     registers.sp += STACK_ELEM_SIZE;
-    if (registers.sp > STACK_LOC + STACK_SIZE) {
+    if (registers.sp < STACK_LOC) {
         fprintf(stderr, "Stack overflow!");
         return false;
     }
@@ -140,10 +147,16 @@ static const uint8_t sprites[SPRITE_SIZE] = {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
+#ifdef __EMSCRIPTEN__
+SDL_Surface *surface;
+
+static void drawFramebuffer() {
+#else
 SDL_Window *window;
 
-static void drawFramebuffer(SDL_Window *window) {
+static void drawFramebuffer() {
     SDL_Surface *surface = SDL_GetWindowSurface(window);
+#endif
     for (int i = 0; i < VIDEO_SIZE; ++i) {
         uint8_t val = readByte((uint16_t) (VIDEO_LOC + i));
         int x = i % (DISPLAY_WIDTH / 8);
@@ -155,11 +168,13 @@ static void drawFramebuffer(SDL_Window *window) {
             SDL_FillRect(surface, &rect, SDL_MapRGB(surface->format, c, c, c));
         }
     }
+#ifndef __EMSCRIPTEN__
     SDL_UpdateWindowSurface(window);
+#endif
 }
 
 static bool quit = false;
-static bool pause = false;
+static bool paused = false;
 static uint8_t *keyPressReg;
 static bool keys[16];
 
@@ -177,7 +192,7 @@ static bool executeInstruction() {
     if (op == 0x00E0) {
         // 00E0: CLS
         memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
-        drawFramebuffer(window);
+        drawFramebuffer();
     } else if (op == 0x00EE) {
         // 00EE: RET
         registers.pc = stackPop();
@@ -189,7 +204,7 @@ static bool executeInstruction() {
         uint16_t addr = (uint16_t) (op & 0x0FFF);
         if (registers.pc - sizeof(registers.pc) == addr) {
             // Detect infinite loop and pause execution
-            pause = true;
+            paused = true;
         }
         registers.pc = addr;
     } else if ((op & 0xF000) == 0x2000) {
@@ -303,7 +318,7 @@ static bool executeInstruction() {
             writeBytes(loc, bytes ^ val);
             registers.vf = (uint8_t) (registers.vf || ((bytes & val) ? 1 : 0));
         }
-        drawFramebuffer(window);
+        drawFramebuffer();
     } else if ((op & 0xF0FF) == 0xE09E) {
         // Ex9E: SKP Vx
         if (keys[*registerVx((uint8_t) ((op & 0x0F00) >> 8))])
@@ -318,7 +333,7 @@ static bool executeInstruction() {
     } else if ((op & 0xF0FF) == 0xF00A) {
         // Fx0A: LD Vx, K
         keyPressReg = registerVx((uint8_t) ((op & 0x0F00) >> 8));
-        pause = true;
+        paused = true;
     } else if ((op & 0xF0FF) == 0xF015) {
         // Fx15: LD DT, Vx
         registers.dt = *registerVx((uint8_t) ((op & 0x0F00) >> 8));
@@ -368,17 +383,73 @@ static bool executeInstruction() {
     return retVal;
 }
 
+double ms, interval = 1000.0 / 60;
+struct timeval t1, t2;
+SDL_Event event;
+
 static void reset() {
+    gettimeofday(&t1, NULL);
+
     memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
     memcpy((void *) &mem[SPRITE_LOC], sprites, sizeof(sprites));
-    drawFramebuffer(window);
+    drawFramebuffer();
     srand((uint16_t) time(NULL));
 
     registers.sp = STACK_LOC;
     registers.pc = ENTRY_POINT;
 }
 
+#ifdef __EMSCRIPTEN__
+void mainLoop() {
+    if (quit) {
+        emscripten_cancel_main_loop();
+        return;
+    }
+#else
+bool mainLoop() {
+#endif
+    while (SDL_PollEvent(&event)) {
+        handleEvent(event);
+    }
+    if (paused) {
+#ifdef __EMSCRIPTEN__
+        return;
+#else
+        if (!quit)
+            SDL_WaitEvent(NULL);
+        return true;
+#endif
+    }
+#ifdef __EMSCRIPTEN__
+    int count = 0;
+    while (count++ < 5) {
+        if (!executeInstruction()) {
+            emscripten_cancel_main_loop();
+            return;
+        }
+    }
+#else
+    if (!executeInstruction()) {
+        return false;
+    }
+#endif
+    gettimeofday(&t2, NULL);
+    ms = (t2.tv_sec - t1.tv_sec) * 1000.0;
+    ms += (t2.tv_usec - t1.tv_usec) / 1000.0;
+    if (ms > interval) {
+        registers.dt = (uint8_t) MAX(registers.dt - (ms / interval), 0);
+        registers.st = (uint8_t) MAX(registers.st - (ms / interval), 0);
+        gettimeofday(&t1, NULL);
+    }
+#ifndef __EMSCRIPTEN__
+    return true;
+#endif
+}
+
 int main(int argc, char *argv[]) {
+#ifdef __EMSCRIPTEN__
+    char *filename = "games/TETRIS";
+#else
     char *filename = NULL;
     struct option long_opts[] = {
             {"quirk-shift", no_argument, (int *) &quirks.shift, true},
@@ -406,6 +477,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
         return 1;
     }
+#endif
 
     FILE *fh = fopen(filename, "rb");
     if (fh == NULL) {
@@ -426,6 +498,14 @@ int main(int argc, char *argv[]) {
     }
     fclose(fh);
 
+#ifdef __EMSCRIPTEN__
+    surface = SDL_SetVideoMode(DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
+                               32, SDL_SWSURFACE);
+    if (surface == NULL) {
+        fprintf(stderr, "Failed to initialize surface. Error: %s\n", SDL_GetError());
+        return 1;
+    }
+#else
     window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
                               SDL_WINDOW_SHOWN);
@@ -433,37 +513,21 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to initialize window. Error: %s\n", SDL_GetError());
         return 1;
     }
+#endif
 
+    printf("Starting %s...\n", filename);
     reset();
 
-    double ms, interval = 1000.0 / 60;
-    struct timeval t1, t2;
-    gettimeofday(&t1, NULL);
-
-    SDL_Event event;
-    while (!quit) {
-        while (SDL_PollEvent(&event)) {
-            handleEvent(event);
-        }
-        if (pause) {
-            if (!quit)
-                SDL_WaitEvent(NULL);
-            continue;
-        }
-        if (!executeInstruction()) {
-            break;
-        }
-        gettimeofday(&t2, NULL);
-        ms = (t2.tv_sec - t1.tv_sec) * 1000.0;
-        ms += (t2.tv_usec - t1.tv_usec) / 1000.0;
-        if (ms > interval) {
-            registers.dt = (uint8_t) MAX(registers.dt - (ms / interval), 0);
-            registers.st = (uint8_t) MAX(registers.st - (ms / interval), 0);
-            gettimeofday(&t1, NULL);
-        }
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop(mainLoop, 0, 1);
+#else
+    while (!quit && !mainLoop()) {
     }
+#endif
 
+#ifndef __EMSCRIPTEN__
     SDL_DestroyWindow(window);
+#endif
     SDL_Quit();
     return 0;
 }
@@ -485,10 +549,10 @@ void handleEvent(SDL_Event event) {
             for (uint8_t k = 0; k < sizeof(mappings); ++k) {
                 if (event.key.keysym.sym == mappings[k]) {
                     keys[k] = true;
-                    if (pause && keyPressReg) {
+                    if (paused && keyPressReg) {
                         *keyPressReg = k;
                         keyPressReg = NULL;
-                        pause = false;
+                        paused = false;
                     }
                     break;
                 }
