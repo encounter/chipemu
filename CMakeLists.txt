@@ -37,7 +37,8 @@ set(SOURCE_FILES main.c)
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Emscripten")
     set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS
-            "--preload-file ${CMAKE_SOURCE_DIR}/games@games")
+            "--preload-file ${CMAKE_SOURCE_DIR}/games@games --shell-file ${CMAKE_SOURCE_DIR}/shell.html " +
+            "-s EXPORTED_FUNCTIONS=\"['_main', '_setCurrentRom', '_setPaused']\"")
 else ()
     target_link_libraries(${PROJECT_NAME} ${SDL2_LIBRARIES})
 endif ()

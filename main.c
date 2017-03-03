@@ -4,14 +4,16 @@
 #include <stdbool.h>
 #include <string.h>
 #include <SDL2/SDL.h>
+#include <netinet/in.h>
+#include <sys/param.h>
+#include <sys/time.h>
+#include <time.h>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-#endif
-#include <netinet/in.h>
-#include <time.h>
-#include <sys/time.h>
-#include <sys/param.h>
+#else
 #include <getopt.h>
+#endif
 
 #define DISPLAY_HEIGHT 32
 #define DISPLAY_WIDTH 64
@@ -72,7 +74,7 @@ static bool writeBytes(uint16_t loc, uint16_t val) {
     return true;
 }
 
-struct {
+static struct {
     uint8_t v0;
     uint8_t v1;
     uint8_t v2;
@@ -97,7 +99,7 @@ struct {
     uint8_t st;
 } registers;
 
-int SDLCALL handleEvent(void *userdata, SDL_Event *event);
+static void handleEvent(SDL_Event *event);
 
 static uint8_t *registerVx(uint8_t num) {
     if (num > 0xF) {
@@ -117,8 +119,8 @@ static bool stackPush(uint16_t val) {
 }
 
 static uint16_t stackPop() {
-    if (registers.sp == STACK_LOC) {
-        fprintf(stderr, "Stack underrun!");
+    if (registers.sp < STACK_LOC) {
+        fprintf(stderr, "Stack overflow!");
         return (uint16_t) -1;
     }
     uint16_t val = readBytes(registers.sp);
@@ -145,7 +147,8 @@ static const uint8_t sprites[SPRITE_SIZE] = {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
-SDL_Window *window;
+static SDL_Window *window;
+static bool fbChanged = false;
 
 static void drawFramebuffer() {
     SDL_Surface *surface = SDL_GetWindowSurface(window);
@@ -164,12 +167,12 @@ static void drawFramebuffer() {
 }
 
 static bool quit = false;
-static bool paused = false;
+static bool paused = true;
 static uint8_t *keyPressReg;
 static bool keys[16];
 
 // Thanks to mir3z/chip8-emu
-struct {
+static struct {
     bool shift;
     bool loadStore;
 } quirks;
@@ -182,7 +185,7 @@ static bool executeInstruction() {
     if (op == 0x00E0) {
         // 00E0: CLS
         memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
-        drawFramebuffer();
+        fbChanged = true;
     } else if (op == 0x00EE) {
         // 00EE: RET
         registers.pc = stackPop();
@@ -308,7 +311,7 @@ static bool executeInstruction() {
             writeBytes(loc, bytes ^ val);
             registers.vf = (uint8_t) (registers.vf || ((bytes & val) ? 1 : 0));
         }
-        drawFramebuffer();
+        fbChanged = true;
     } else if ((op & 0xF0FF) == 0xE09E) {
         // Ex9E: SKP Vx
         if (keys[*registerVx((uint8_t) ((op & 0x0F00) >> 8))])
@@ -369,39 +372,27 @@ static bool executeInstruction() {
         fprintf(stderr, "Unknown instruction 0x%04x at 0x%04x\n", op, registers.pc);
         retVal = false;
     }
-    nanosleep((const struct timespec[]) {{0, 1000000L}}, NULL);
     return retVal;
 }
 
-double ms, interval = 1000.0 / 60;
-struct timeval t1, t2;
-
-static void reset() {
-    gettimeofday(&t1, NULL);
-
-    memset((void *) &mem[VIDEO_LOC], 0, VIDEO_SIZE);
-    memcpy((void *) &mem[SPRITE_LOC], sprites, sizeof(sprites));
-    drawFramebuffer();
-    srand((uint16_t) time(NULL));
-
-    registers.sp = STACK_LOC;
-    registers.pc = ENTRY_POINT;
-
-    paused = false;
-}
+static double ms, interval = 1000.0 / 60;
+static struct timeval t1, t2;
+static char *filename = NULL;
 
 #ifdef __EMSCRIPTEN__
-void mainLoop() {
+static void mainLoop() {
     if (quit) {
         emscripten_cancel_main_loop();
         return;
     }
 #else
-bool mainLoop() {
+static bool mainLoop() {
+    if (quit)
+        return false;
 #endif
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        handleEvent(0, &event);
+        handleEvent(&event);
     }
     if (paused) {
 #ifdef __EMSCRIPTEN__
@@ -425,6 +416,9 @@ bool mainLoop() {
         return false;
     }
 #endif
+    if (fbChanged) {
+        drawFramebuffer();
+    }
     gettimeofday(&t2, NULL);
     ms = (t2.tv_sec - t1.tv_sec) * 1000.0;
     ms += (t2.tv_usec - t1.tv_usec) / 1000.0;
@@ -438,15 +432,60 @@ bool mainLoop() {
 #endif
 }
 
+static bool loadRom() {
+    printf("Starting %s...\n", filename);
+
+    FILE *fh = fopen(filename, "rb");
+    if (fh == NULL) {
+        fprintf(stderr, "Failed open ROM %s\n", filename);
+        return false;
+    }
+    fseek(fh, 0L, SEEK_END);
+    size_t size = (size_t) ftell(fh);
+    if (size < 1 || size > sizeof(mem) - ENTRY_POINT) {
+        fprintf(stderr, "Failed read ROM.\n");
+        fclose(fh);
+        return false;
+    }
+    rewind(fh);
+    size_t read = fread((void *) &mem[ENTRY_POINT], sizeof(uint8_t), size, fh);
+    if (read < size) {
+        fprintf(stderr, "Failed read ROM.\n");
+        fclose(fh);
+        return false;
+    }
+    fclose(fh);
+    return true;
+}
+
+static bool reset() {
+    if (filename == NULL) {
+        printf("Initialization complete.\n");
+        return true;
+    }
+
+    memset((void *) &mem, 0, MEM_SIZE);
+    if (!loadRom()) {
+        return false;
+    }
+
+    memcpy((void *) &mem[SPRITE_LOC], sprites, sizeof(sprites));
+    drawFramebuffer();
+
+    gettimeofday(&t1, NULL);
+    srand((uint16_t) time(NULL));
+
+    registers.sp = STACK_LOC;
+    registers.pc = ENTRY_POINT;
+
+    paused = false;
+    return true;
+}
+
 int main(int argc, char *argv[]) {
-#ifdef __EMSCRIPTEN__
-    char *filename = "games/TETRIS";
-    //quirks.shift = true;
-    //quirks.loadStore = true;
-#else
-    char *filename = NULL;
+#ifndef __EMSCRIPTEN__
     struct option long_opts[] = {
-            {"quirk-shift", no_argument, (int *) &quirks.shift, true},
+            {"quirk-shift",     no_argument, (int *) &quirks.shift,     true},
             {"quirk-loadstore", no_argument, (int *) &quirks.loadStore, true}
     };
     int optIndex;
@@ -466,32 +505,12 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: chipemu [rom] [--quirk-shift] [--quirk-loadstore]\n");
         return 1;
     }
+#endif
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
         return 1;
     }
-#endif
-
-    FILE *fh = fopen(filename, "rb");
-    if (fh == NULL) {
-        fprintf(stderr, "Failed open ROM %s\n", filename);
-        return 1;
-    }
-    fseek(fh, 0L, SEEK_END);
-    size_t size = (size_t) ftell(fh);
-    if (size < 1 || size > sizeof(mem) - ENTRY_POINT) {
-        fprintf(stderr, "Failed read ROM.\n");
-        return 1;
-    }
-    rewind(fh);
-    size_t read = fread((void *) &mem[ENTRY_POINT], sizeof(uint8_t), size, fh);
-    if (read < size) {
-        fprintf(stderr, "Failed read ROM.\n");
-        return 1;
-    }
-    fclose(fh);
-
     window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
                               SDL_WINDOW_SHOWN);
@@ -500,19 +519,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("Starting %s...\n", filename);
-    reset();
+    if (!reset()) {
+        fprintf(stderr, "Failed to initialize emulator.\n");
+        return 1;
+    }
 
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop(mainLoop, 0, 1);
 #else
-    while (!quit && mainLoop()) {
+    while (mainLoop()) {
+        nanosleep((const struct timespec[]) {{0, 1000000L}}, NULL);
     }
 #endif
 
-#ifndef __EMSCRIPTEN__
     SDL_DestroyWindow(window);
-#endif
     SDL_Quit();
     return 0;
 }
@@ -524,7 +544,7 @@ static uint32_t mappings[16] = {
         SDLK_4, SDLK_r, SDLK_f, SDLK_v
 };
 
-int SDLCALL handleEvent(void *userdata, SDL_Event *event) {
+static void handleEvent(SDL_Event *event) {
     switch (event->type) {
         case SDL_KEYDOWN:
             if (event->key.keysym.sym == SDLK_ESCAPE) {
@@ -557,5 +577,24 @@ int SDLCALL handleEvent(void *userdata, SDL_Event *event) {
         default:
             break;
     }
-    return 0;
 }
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+void setCurrentRom(char *path) {
+    char *p = strchr(path, ';');
+    if (p) {
+        quirks.shift = strstr(p, ";qs") != NULL;
+        quirks.loadStore = strstr(p, ";qls") != NULL;
+        *p = 0;
+    }
+    printf("Setting current ROM to %s\n", path);
+    filename = path;
+    reset();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void setPaused(bool val) {
+    paused = val;
+}
+#endif
