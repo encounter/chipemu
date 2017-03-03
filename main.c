@@ -397,6 +397,8 @@ static void reset() {
 
     registers.sp = STACK_LOC;
     registers.pc = ENTRY_POINT;
+
+    paused = false;
 }
 
 #ifdef __EMSCRIPTEN__
@@ -449,6 +451,8 @@ bool mainLoop() {
 int main(int argc, char *argv[]) {
 #ifdef __EMSCRIPTEN__
     char *filename = "games/TETRIS";
+    //quirks.shift = true;
+    //quirks.loadStore = true;
 #else
     char *filename = NULL;
     struct option long_opts[] = {
@@ -521,7 +525,7 @@ int main(int argc, char *argv[]) {
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop(mainLoop, 0, 1);
 #else
-    while (!quit && !mainLoop()) {
+    while (!quit && mainLoop()) {
     }
 #endif
 
