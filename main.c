@@ -3,11 +3,9 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <SDL2/SDL.h>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-#include <SDL/SDL.h>
-#else
-#include <SDL2/SDL.h>
 #endif
 #include <netinet/in.h>
 #include <time.h>
@@ -99,7 +97,7 @@ struct {
     uint8_t st;
 } registers;
 
-void handleEvent(SDL_Event event);
+int SDLCALL handleEvent(void *userdata, SDL_Event *event);
 
 static uint8_t *registerVx(uint8_t num) {
     if (num > 0xF) {
@@ -147,16 +145,10 @@ static const uint8_t sprites[SPRITE_SIZE] = {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
-#ifdef __EMSCRIPTEN__
-SDL_Surface *surface;
-
-static void drawFramebuffer() {
-#else
 SDL_Window *window;
 
 static void drawFramebuffer() {
     SDL_Surface *surface = SDL_GetWindowSurface(window);
-#endif
     for (int i = 0; i < VIDEO_SIZE; ++i) {
         uint8_t val = readByte((uint16_t) (VIDEO_LOC + i));
         int x = i % (DISPLAY_WIDTH / 8);
@@ -168,9 +160,7 @@ static void drawFramebuffer() {
             SDL_FillRect(surface, &rect, SDL_MapRGB(surface->format, c, c, c));
         }
     }
-#ifndef __EMSCRIPTEN__
     SDL_UpdateWindowSurface(window);
-#endif
 }
 
 static bool quit = false;
@@ -385,7 +375,6 @@ static bool executeInstruction() {
 
 double ms, interval = 1000.0 / 60;
 struct timeval t1, t2;
-SDL_Event event;
 
 static void reset() {
     gettimeofday(&t1, NULL);
@@ -410,8 +399,9 @@ void mainLoop() {
 #else
 bool mainLoop() {
 #endif
+    SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        handleEvent(event);
+        handleEvent(0, &event);
     }
     if (paused) {
 #ifdef __EMSCRIPTEN__
@@ -424,7 +414,7 @@ bool mainLoop() {
     }
 #ifdef __EMSCRIPTEN__
     int count = 0;
-    while (count++ < 5) {
+    while (count++ < 10) {
         if (!executeInstruction()) {
             emscripten_cancel_main_loop();
             return;
@@ -502,14 +492,6 @@ int main(int argc, char *argv[]) {
     }
     fclose(fh);
 
-#ifdef __EMSCRIPTEN__
-    surface = SDL_SetVideoMode(DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
-                               32, SDL_SWSURFACE);
-    if (surface == NULL) {
-        fprintf(stderr, "Failed to initialize surface. Error: %s\n", SDL_GetError());
-        return 1;
-    }
-#else
     window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               DISPLAY_WIDTH * DISPLAY_SCALE, DISPLAY_HEIGHT * DISPLAY_SCALE,
                               SDL_WINDOW_SHOWN);
@@ -517,7 +499,6 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to initialize window. Error: %s\n", SDL_GetError());
         return 1;
     }
-#endif
 
     printf("Starting %s...\n", filename);
     reset();
@@ -543,15 +524,15 @@ static uint32_t mappings[16] = {
         SDLK_4, SDLK_r, SDLK_f, SDLK_v
 };
 
-void handleEvent(SDL_Event event) {
-    switch (event.type) {
+int SDLCALL handleEvent(void *userdata, SDL_Event *event) {
+    switch (event->type) {
         case SDL_KEYDOWN:
-            if (event.key.keysym.sym == SDLK_ESCAPE) {
+            if (event->key.keysym.sym == SDLK_ESCAPE) {
                 reset();
                 break;
             }
             for (uint8_t k = 0; k < sizeof(mappings); ++k) {
-                if (event.key.keysym.sym == mappings[k]) {
+                if (event->key.keysym.sym == mappings[k]) {
                     keys[k] = true;
                     if (paused && keyPressReg) {
                         *keyPressReg = k;
@@ -564,7 +545,7 @@ void handleEvent(SDL_Event event) {
             break;
         case SDL_KEYUP:
             for (uint8_t k = 0; k < sizeof(mappings); ++k) {
-                if (event.key.keysym.sym == mappings[k]) {
+                if (event->key.keysym.sym == mappings[k]) {
                     keys[k] = false;
                     break;
                 }
@@ -576,4 +557,5 @@ void handleEvent(SDL_Event event) {
         default:
             break;
     }
+    return 0;
 }
