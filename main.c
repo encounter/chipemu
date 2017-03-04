@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <SDL2/SDL.h>
-#include <netinet/in.h>
 #include <sys/param.h>
 #include <sys/time.h>
 #include <time.h>
@@ -13,6 +12,20 @@
 #include <emscripten.h>
 #else
 #include <getopt.h>
+#endif
+
+#ifdef __WINDOWS__
+#include <winsock2.h>
+
+#ifndef MIN
+#   define MIN(x,y) ((x)<(y)?(x):(y))
+#endif
+
+#ifndef MAX
+#   define MAX(x,y) ((x)>(y)?(x):(y))
+#endif
+#else
+#include <netinet/in.h>
 #endif
 
 #define DISPLAY_HEIGHT 32
