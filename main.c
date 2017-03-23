@@ -177,6 +177,7 @@ static void drawFramebuffer() {
         }
     }
     SDL_UpdateWindowSurface(window);
+    fbChanged = false;
 }
 
 static bool quit = false;
